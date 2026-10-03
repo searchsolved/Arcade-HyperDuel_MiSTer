@@ -28,11 +28,12 @@ The jt51 core is used unmodified except for the build accommodations
 listed in `rtl/vendor/PATCHES.md` (Verilator lint pragmas); the core's
 bus glue holds each YM2151 write until jt51's cen_p1 so its busy flag
 works. jt6295 has the same build accommodation (a lookup table kept in
-logic for Quartus 17 RAM inference) and three behavioural patches to
-`jt6295_serial.v`, matching MAME's M6295 model: a phrase ends after the
-second nibble of its stop byte, a start command to a channel that is
-still playing is ignored, and the busy flags follow the committed
-channel state (`rtl/vendor/PATCHES.md`, `docs/ACCURACY.md` 3.7). fx68k
+logic for Quartus 17 RAM inference) and three behavioural patches,
+matching MAME's M6295 model: a phrase ends after the second nibble of
+its stop byte, a start command to a channel that is still playing is
+ignored, and the busy status is timed as the MSM6295 datasheet
+describes, with a decoder reset on every start
+(`rtl/vendor/PATCHES.md`, `docs/ACCURACY.md` 3.7 and 3.8). fx68k
 carries a packed-struct portability patch for Verilator, also
 documented there.
 

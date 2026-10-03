@@ -19,6 +19,8 @@
 module jt6295_ctrl(
     input                  rst,
     input                  clk,
+    input                  cen,     // master clock enable (the datasheet's "clock")
+    input                  ss,      // sample-rate pin: n = 4 (H) or 5 (L)
     input                  cen4,
     input                  cen1,
     // CPU
@@ -38,8 +40,12 @@ module jt6295_ctrl(
     output reg [ 3:0]      stop,
     input      [ 3:0]      busy,
     input      [ 3:0]      ack,
-    input                  zero
+    input                  zero,
+    // Patch 3 (PROVENANCE.md): BUSY as the datasheet times it
+    output reg [ 3:0]      rdbusy
 );
+
+reg [3:0] status;          // MAME's per-voice "playing" (patch 3)
 
 reg  last_wrn;
 wire negedge_wrn  = !wrn && last_wrn;
@@ -78,6 +84,51 @@ end
 
 
 // Bus interface
+// Patch 3 (PROVENANCE.md, R17): the status register is a per-channel
+// "playing" flag kept here, as MAME's okim6295 voice.m_playing:
+//  - set when a start's second byte is accepted (channel not playing),
+//  - cleared at once by a stop command,
+//  - cleared when the channel's phrase ends in jt6295_serial (falling edge
+//    of the committed busy flag) unless a start for it is still on its way.
+// Starts to a playing channel are dropped here (patch 2). A start accepted
+// for a channel clears that channel's pending stop (the new phrase replaces
+// whatever is left of the old one), and a stop clears a start that has not
+// reached jt6295_serial yet, so the two requests never meet in one slot and
+// a later start can neither cancel a stop nor be lost to it. Upstream
+// cleared every pending stop on any start's first byte and replaced the
+// stop register on each stop command.
+reg [3:0] spend;           // start accepted, not yet acknowledged by serial
+reg [3:0] kill;            // stop written: cancel any queued start
+reg [3:0] busy_l;          // busy, last clock
+reg [3:0] ack_l;           // ack, last clock
+reg [6:0] cmd_phrase;      // phrase of the start being written
+wire [3:0] accept = din[7:4] & ~status;
+// BUSY read by the CPU, timed as the MSM6295 datasheet (OKI data book
+// p. 73, "Start and Stop of 1 Channel"): "H" 15 x n clocks after a start's
+// second byte, "L" at the next sample after a stop (the stop takes effect
+// in the channel's slot) or when the phrase ends. n = 4 (SS high) or 5.
+// `status` above stays MAME's "playing" flag and decides whether a start
+// is accepted: the datasheet does not cover a start to a playing channel
+// or a restart within one sample of a stop (it says to wait a sample),
+// and games do both (Ganbare Ginkun restarts 42 us after a stop), so the
+// outcome follows MAME, where such a restart plays.
+reg  [6:0] sdly0, sdly1, sdly2, sdly3;
+reg  [3:0] sarm;
+wire [6:0] sdly_n = ss ? 7'd60 : 7'd75;
+wire [3:0] sdone  = sarm & { sdly3==7'd1, sdly2==7'd1, sdly1==7'd1, sdly0==7'd1 };
+// a start whose phrase fetch has not finished is replaced by a newer one
+// (as upstream); its channel must not stay marked as playing
+// (only when the new command is accepted: an ignored start changes nothing)
+wire [3:0] dropped = ((pull | push) && accept != 4'd0) ? ch & ~accept : 4'd0;
+wire [3:0] ended  = busy_l & ~busy & ~spend & ~ack;
+// pending stops: cleared once committed (upstream), and, when a start
+// reaches the channel (ack rises), dropped: the start was written after the
+// stop, so its phrase replaces the stopped one, as MAME's stop-then-start
+wire [3:0] stop_base = (cen4 ? stop & busy : stop) & ~(ack & ~ack_l);
+// a pending stop leaving the register other than by a start's acknowledge
+// has taken effect at its channel's sample point
+wire [3:0] stopped = stop & ~(cen4 ? stop & busy : stop) & ~(ack & ~ack_l);
+
 always @(posedge clk) begin
     if( rst ) begin
         cmd      <= 1'b0;
@@ -86,24 +137,57 @@ always @(posedge clk) begin
         pull     <= 1'b1;
         phrase   <= 7'd0;
         new_att  <= 0;
+        status   <= 4'd0;
+        spend    <= 4'd0;
+        kill     <= 4'd0;
+        busy_l   <= 4'd0;
+        ack_l    <= 4'd0;
+        cmd_phrase <= 7'd0;
+        rdbusy   <= 4'd0;
+        sarm     <= 4'd0;
+        { sdly0, sdly1, sdly2, sdly3 } <= 28'd0;
     end else begin
-        if( cen4 ) begin
-            stop <= stop & busy;
+        busy_l <= busy;
+        ack_l  <= ack;
+        kill   <= 4'd0;
+        spend  <= spend & ~ack;
+        status <= status & ~ended;
+        rdbusy <= (rdbusy & ~ended & ~stopped) | sdone;
+        if( cen ) begin
+            if( sarm[0] ) sdly0 <= sdly0 - 7'd1;
+            if( sarm[1] ) sdly1 <= sdly1 - 7'd1;
+            if( sarm[2] ) sdly2 <= sdly2 - 7'd1;
+            if( sarm[3] ) sdly3 <= sdly3 - 7'd1;
+            sarm <= sarm & ~sdone;
         end
+        stop <= stop_base;
         if( push ) pull <= 1'b0;
         if( negedge_wrn  ) begin // new write
             if( cmd ) begin // 2nd byte
-                ch      <= din[7:4];
-                new_att <= din[3:0];
                 cmd     <= 1'b0;
-                pull    <= 1'b1;
+                if( accept != 4'd0 ) begin // patch 2: starts to playing channels are dropped
+                    phrase  <= cmd_phrase;
+                    ch      <= accept;
+                    new_att <= din[3:0];
+                    pull    <= 1'b1;
+                end
+                status  <= (status & ~ended & ~dropped) | accept;
+                spend   <= (spend & ~ack & ~dropped) | accept;
+                sarm    <= (sarm & ~dropped & ~(cen ? sdone : 4'd0)) | accept;
+                if( accept[0] ) sdly0 <= sdly_n;
+                if( accept[1] ) sdly1 <= sdly_n;
+                if( accept[2] ) sdly2 <= sdly_n;
+                if( accept[3] ) sdly3 <= sdly_n;
             end
             else if( din[7] ) begin // channel start
-                phrase <= din[6:0];
+                cmd_phrase <= din[6:0]; // phrase is taken only if the start is accepted
                 cmd    <= 1'b1; // wait for second byte
-                stop   <= 4'd0;
             end else begin // stop data
-                stop   <= din[6:3];
+                stop   <= stop_base | din[6:3];
+                status <= status & ~ended & ~din[6:3];
+                spend  <= spend & ~ack & ~din[6:3];
+                sarm   <= sarm & ~din[6:3];   // a start still in its 15 x n delay is cancelled
+                kill   <= din[6:3];
             end
         end
     end
@@ -137,7 +221,7 @@ always @(posedge clk) begin
         end
         case( st )
             7: begin
-                start    <= start & ~ack;
+                start    <= start & ~ack & ~kill;
                 addr_lsb <= 0;
                 if(pull) begin
                     st       <= 0;
@@ -152,7 +236,9 @@ always @(posedge clk) begin
             4: new_stop [17:16] <= rom_data[1:0];
             5: new_stop [15: 8] <= rom_data;
             6: begin
-                start       <= ch;
+                // patch 3: keep earlier unacknowledged starts (upstream
+                // replaced them); a stop since the write drops the start
+                start       <= (start & ~ack & ~kill) | (ch & spend & ~kill);
                 start_addr  <= new_start;
                 stop_addr   <= {new_stop[17:8], rom_data} ;
                 att         <= new_att;

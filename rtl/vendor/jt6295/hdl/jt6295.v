@@ -47,18 +47,18 @@ wire        cen_sr32, // 32x sampling rate
             cen_48k,  // 48 kHz
             cen_eff;  // effective sound sampling rate after optional interpolator
 
-wire [ 3:0] busy, ack, start, stop;
+wire [ 3:0] busy /* verilator public_flat_rd */, rdbusy, ack, start /* verilator public_flat_rd */, stop /* verilator public_flat_rd */;
 wire [17:0] start_addr, stop_addr ,
             ch_addr;
 wire [ 9:0] ctrl_addr;
 wire [ 7:0] ch_data, ctrl_data;
 wire [ 3:0] data0, data1, data2, data3, pipe_data;
-wire [ 3:0] att, pipe_att;
+wire [ 3:0] att /* verilator public_flat_rd */, pipe_att /* verilator public_flat_rd */;
 wire        ctrl_ok, ctrl_cs, zero;
 wire        pipe_en;
 wire signed [11:0] pipe_snd;
 
-assign dout   = { 4'hf, busy | start };
+assign dout   = { 4'hf, rdbusy }; // patch 3 (PROVENANCE.md): BUSY timed as the datasheet
 assign sample = SAMPLE==0 ? cen_48k : cen_eff;
 
 jt6295_timing u_timing(
@@ -98,6 +98,8 @@ jt6295_rom u_rom(
 jt6295_ctrl u_ctrl(
     .rst        ( rst           ),
     .clk        ( clk           ),
+    .cen        ( cen           ),
+    .ss         ( ss            ),
     .cen1       ( cen_sr        ),
     .cen4       ( cen_sr4       ),
     // CPU
@@ -117,7 +119,8 @@ jt6295_ctrl u_ctrl(
     .stop       ( stop          ),
     .busy       ( busy          ),
     .ack        ( ack           ),
-    .zero       ( zero          )
+    .zero       ( zero          ),
+    .rdbusy     ( rdbusy        )
 );
 
 jt6295_serial u_serial(

@@ -75,14 +75,10 @@ always @(posedge clk, posedge rst ) begin
     if( rst ) begin
         busy <= 4'd0;
     end else begin
-        // Hyper Duel patch 3 (rtl/vendor/PATCHES.md, from the Tecmo 16
-        // core): the busy flags follow the channel state committed to the
-        // CSR shift register at cen4. Upstream updates them on every clock
-        // of the channel's slot, so a pending stop reads as idle before it
-        // is committed, and a start command's first byte (which clears the
-        // pending stop in jt6295_ctrl) arriving in that window cancels the
-        // stop: the old phrase plays on and the new start is ignored.
-        if( cen4 ) case( ch )
+        // Upstream behaviour: busy follows the channel's next state during
+        // its slot. It only feeds jt6295_ctrl now, which keeps the status
+        // register (MAME's "playing") itself (patch 3, PROVENANCE.md).
+        case( ch )
             4'b0001: busy[0] <= busy_in;
             4'b0010: busy[1] <= busy_in;
             4'b0100: busy[2] <= busy_in;
@@ -111,24 +107,28 @@ always @(posedge clk, posedge rst ) begin
 end
 
 assign zero     = ch[0];
-// Hyper Duel patch (rtl/vendor/PATCHES.md, 2026-10-03): a start for a
-// channel that is still playing is ignored, as MAME (okim6295.cpp
-// L281-284) and this core's own README describe. The start request is
-// still acknowledged so the control block clears it.
-wire   start_ok = up_start & ~busy_out;
+// Patch 2 (PROVENANCE.md): a start for a channel that is still playing is
+// ignored, as MAME okim6295.cpp L281-284. The check is made in jt6295_ctrl
+// against its status flags (patch 3), so any start that reaches this point
+// is performed, even if the old phrase's stop has not been committed yet.
+wire   start_ok = up_start;
 assign update   = start_ok | up_stop;
 assign cont     = busy_out & ~over;
 assign cnt_next = cont      ? cnt+19'd1 : cnt;
 assign stop_in  = start_ok  ? stop_addr : stop_out;
 assign cnt_in   = start_ok  ? {start_addr, 1'b0} : cnt_next;
 assign att_in   = start_ok  ? att : att_out;
-assign busy_in  = update    ? (start_ok & ~up_stop) : cont;
+// Patch 3: a start that reaches its channel wins over a stop pending for
+// the same slot (the stop was written before the start: jt6295_ctrl drops
+// a start when a stop follows it, and drops the pending stop when the
+// start is acknowledged).
+assign busy_in  = start_ok ? 1'b1 : up_stop ? 1'b0 : cont;
 
 wire [CSRW-1:0] csr_in, csr_out;
 assign csr_in = { stop_in, cnt_in, att_in, busy_in };
 assign {stop_out, cnt, att_out, busy_out } = csr_out;
 assign rom_addr = cnt[18:1];
-assign over     = cnt >= {stop_out, 1'b1}; // Hyper Duel patch: stop byte inclusive (PATCHES.md)
+assign over     = cnt >= {stop_out, 1'b1}; // Patch 1: stop byte inclusive (PROVENANCE.md)
 
 jt6295_sh_rst #(.WIDTH(CSRW), .STAGES(4) ) u_cnt(
     .rst    ( rst       ),
@@ -150,8 +150,13 @@ always @(posedge clk, posedge rst) begin
         pipe_data <= !cnt[0] ? rom_data[7:4] : rom_data[3:0];
         // attenuation
         pipe_att  <= att_out;
-        // busy / enable
-        pipe_en   <= busy_out;
+        // busy / enable. Patch 3: in the slot where a start reloads the
+        // channel the decoder is disabled for one sample, which resets its
+        // predictor and step index as MAME's okim6295 does on every start
+        // (voice.m_adpcm.reset()). Upstream only reset it when the channel
+        // had been idle, so a start that replaced a playing (or not yet
+        // stopped) phrase decoded the new phrase from the old one's state.
+        pipe_en   <= busy_out & ~start_ok;
     end
 end
 

@@ -93,3 +93,22 @@ Related change outside the vendor tree (`rtl/hyprduel_sys.sv`, also
 2026-10-03): a CPU write to the YM2151 is held until jt51's next cen_p1
 instead of a one-clock strobe, because jt51 sets its busy flag only for
 a write that lands on cen_p1. jt51 itself is unmodified.
+
+## jt6295 patch 3 replaced: BUSY as the datasheet (2026-10-03)
+
+Patch 3 above (busy flags at cen4) is replaced in `jt6295_ctrl.v`,
+`jt6295_serial.v` and `jt6295.v`: the status read (BUSY) is timed as the MSM6295 datasheet
+(p. 73: "BUSY becomes "H" after 15 x n clock" from a start's second
+byte; after a stop, "voice playback stops all the next sample and BUSY
+becomes "L""); whether a start is accepted follows MAME's per-voice
+"playing" flag, since the datasheet does not cover a start to a playing
+channel or a restart within one sample of a stop; a start's first byte no
+longer clears pending stops; a stop cancels a queued start for its
+channel; the ADPCM decoder resets on every start. The datasheet (MSM6295,
+later edition, p. 73) outranks MAME; MAME decides what it leaves open.
+Verification for this core: `docs/ACCURACY.md` 3.8. The patched files are identical in four cores (1945k III, Tecmo 16,
+Dooyong, Hyper Duel): hdl/jt6295.v md5 5ac531e429298723ae48a064551b9685,
+hdl/jt6295_ctrl.v 3c275bd9d77dc5dbc89eea5d4a277aa5, hdl/jt6295_serial.v
+5523e7c4708b29324ed409d16cad92a2. Full description, datasheet quotes and
+per-game results: `1945kiii-mister/rtl/vendor/jt6295/PROVENANCE.md`
+(patch 3).

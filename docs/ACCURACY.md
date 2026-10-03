@@ -396,6 +396,47 @@ research item in the 1945k III core). Fix 4 makes jt51 behave as the
 chip's datasheet describes (busy after a data write); it is not
 observable in this game.
 
+### 3.8 jt6295 fix 3 replaced: BUSY as the datasheet (2026-10-03)
+
+Fix 3 of 3.7 (busy flags at cen4) is replaced (rtl/vendor/PATCHES.md):
+the status read (BUSY) is timed as the MSM6295 datasheet
+(p. 73: "BUSY becomes "H" after 15 x n clock" from a start's second
+byte; after a stop, "voice playback stops all the next sample and BUSY
+becomes "L""); whether a start is accepted follows MAME's per-voice
+"playing" flag, since the datasheet does not cover a start to a playing
+channel or a restart within one sample of a stop; a start's first byte no
+longer clears pending stops; a stop cancels a queued start for its
+channel; the ADPCM decoder resets on every start. The jt6295 files are identical in the four cores. The
+datasheet (MSM6295 later edition p. 73, read by two people) outranks
+MAME; MAME decides what it leaves open.
+
+Effect here, with MAME's three OKI command streams replayed through the
+chip alone at MAME's OKI clock (`sim/okireplay/`), against the 3.7 build:
+
+| Stream | Starts | RMS, 3.7 build | RMS, MAME-timed version |
+|---|---|---|---|
+| Hyper Duel attract | 497 | 6,931.5 | 6,934.6 (+0.004 dB) |
+| Hyper Duel scripted play | 561 | 11,067.7 | 11,067.6 (-0.000 dB) |
+| Magical Error attract | 74 | 6,415.0 | 6,416.6 (+0.002 dB) |
+
+The kept, datasheet-timed version differs from the MAME-timed one only in
+when the status read changes, which these games never read (3.7: 0 status
+reads in MAME and in the core), so its output is the same. No start finds
+its voice busy in any stream. Program flow cannot change. Results in the
+other cores:
+
+| Game | Result against MAME | Class |
+|---|---|---|
+| Blue Hawk (Dooyong) | first difference frame 2,121: a status read 8 us after a stop returns 0xFB (busy), MAME 0xFA; the program then differs from frame 2,125 (the old R13 point) | MAME wrong per datasheet |
+| Flying Tiger (Dooyong) | identical to MAME (to frame 1,200) | none |
+| Sadari, Pop Bingo (Dooyong) | identical to MAME with the MAME-timed version (to frame 2,400); not re-run with the datasheet timing | not measured |
+| Ganbare Ginkun (Tecmo 16) | commands identical in order and value; M6295 writes up to 280 us later (its fade polls wait for the real BUSY); level -0.01 dB, correlation 0.999 | MAME wrong per datasheet, timing only |
+| Final Star Force play (Tecmo 16) | M6295 writes up to 99 us later; level -0.02 dB | MAME wrong per datasheet, timing only |
+| 1945k III, Solite Spirits, '96 Flag Rally | output and I/O identical to the previous build (1945k III 2,001 frames, Solite Spirits 4,001, Flag Rally 2,001) | none |
+| Hyper Duel, Magical Error | the games never read the status; MAME's OKI streams replayed through the chip: level within 0.004 dB | none |
+
+Not built yet: a video change is being added first, then one build.
+
 ## 4. What we do NOT claim
 
 - Not "cycle-accurate": that term is unfalsifiable without silicon
