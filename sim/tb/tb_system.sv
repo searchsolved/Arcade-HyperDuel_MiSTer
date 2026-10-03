@@ -7,7 +7,11 @@
 
 `timescale 1ns/1ps
 
-module tb_system;
+module tb_system #(
+  // 1: the dut runs with FREE_TIMING (raster from tb rst_n, core from
+  // rst_n_sys), as the MiSTer shell does; frames count from the core's start
+  parameter bit TB_FREE = 1'b0
+);
 
   localparam int GFX_AW = 22;
 `ifdef PIXDIV12
@@ -164,8 +168,9 @@ module tb_system;
   // default Hyper Duel. hyprduel_sys samples it while in reset.
   logic tb_game_me;
   initial tb_game_me = $test$plusargs("MAGERROR") ? 1'b1 : 1'b0;
-  hyprduel_sys #(.GFX_AW(GFX_AW), .P_PIXDIV(PIXDIV)) dut (
-    .clk(clk), .rst_n(rst_n_sys),
+  logic dut_run;
+  hyprduel_sys #(.GFX_AW(GFX_AW), .P_PIXDIV(PIXDIV), .FREE_TIMING(TB_FREE)) dut (
+    .clk(clk), .rst_n(rst_n_sys), .i_pwr_rst_n(rst_n), .o_run(dut_run),
     .i_game_me(tb_game_me),
     .o_hs(hs), .o_vs(vs), .o_de(de), .o_ce_pix(ce_pix),
     .o_hblank(), .o_vblank(),
@@ -309,8 +314,22 @@ module tb_system;
   logic [23:0] frame [0:HEIGHT-1][0:WIDTH-1];
   int cap_x, cap_y, frames_seen;
   logic de_d, vs_d;
+  // video-during-reset statistics (boot black-screen fix)
+  int pre_vs_edges, pre_lit_px; logic pre_vs_d, pre_done;
   always_ff @(posedge clk) begin
     if (!rst_n) begin
+      pre_vs_edges <= 0; pre_lit_px <= 0; pre_vs_d <= 0; pre_done <= 0;
+    end else if (!dut_run) begin
+      pre_vs_d <= vs;
+      if (vs && !pre_vs_d) pre_vs_edges <= pre_vs_edges + 1;
+      if (ce_pix && de && (r5 != 0 || g5 != 0 || b5 != 0)) pre_lit_px <= pre_lit_px + 1;
+    end else if (!pre_done) begin
+      pre_done <= 1;
+      $display("PRE-RUN vs_edges %0d lit_px %0d t=%0t", pre_vs_edges, pre_lit_px, $time);
+    end
+  end
+  always_ff @(posedge clk) begin
+    if (!rst_n || !dut_run) begin
       cap_x <= 0; cap_y <= 0; frames_seen <= 0; de_d <= 0; vs_d <= 0;
     end else if (ce_pix) begin
       de_d <= de;

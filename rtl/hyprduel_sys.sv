@@ -18,10 +18,16 @@
 module hyprduel_sys #(
     parameter int GFX_AW = 22,
     parameter int P_PIXDIV = 6,     // sys clocks per pixel (sim speed)
-    parameter int P_CPUDIV = 8      // sys clocks per 68k clock
+    parameter int P_CPUDIV = 8,     // sys clocks per 68k clock
+    // 1 in the MiSTer shell: the video raster runs from i_pwr_rst_n and keeps
+    // sync during the core reset (i4220_vdp FREE_TIMING); 0 = verified
+    // simulation behaviour
+    parameter bit FREE_TIMING = 1'b0
 ) (
     input  logic clk,
-    input  logic rst_n,
+    input  logic rst_n,             // core reset request (active low)
+    input  logic i_pwr_rst_n,       // FREE_TIMING: power-on reset of the video raster
+    output logic o_run,             // core out of reset (effective)
 
     // game select: 0 = Hyper Duel, 1 = Magical Error wo Sagase.
     // Sampled only while rst_n is low (static during play).
@@ -107,13 +113,29 @@ module hyprduel_sys #(
     output logic [15:0] dbg_topflags
 );
 
+  // FREE_TIMING: the VDP raster counters run from power-on; tim_evt marks
+  // the pixel enable that would start line 0, and while the core is in reset
+  // that enable reloads the counters to their reset values instead. The
+  // core is released on the clock after such a reload (tim_fresh), so its
+  // first running clock sees exactly the state a reset release gives.
+  logic tim_evt, tim_fresh, run_q, tim_rst;
+  logic crst_n;
+  wire  tim_load = FREE_TIMING && !crst_n && tim_evt;
+  assign tim_rst = FREE_TIMING ? (!i_pwr_rst_n || tim_load) : !rst_n;
+  assign crst_n  = FREE_TIMING ? (rst_n && i_pwr_rst_n && (run_q || tim_fresh)) : rst_n;
+  always_ff @(posedge clk) begin
+    tim_fresh <= tim_rst;
+    run_q     <= crst_n;
+  end
+  assign o_run = crst_n;
+
   // ------------------------------------------------------------------
   // game select, registered once per reset (SDC: false path from
   // game_me_r, it only changes while the whole core is held in reset)
   // ------------------------------------------------------------------
   logic game_me_r;
   always_ff @(posedge clk)
-    if (!rst_n) game_me_r <= i_game_me;
+    if (!crst_n) game_me_r <= i_game_me;
   wire me = game_me_r;
 
   // ------------------------------------------------------------------
@@ -128,7 +150,7 @@ module hyprduel_sys #(
   wire enPhi1 = (32'(cpudiv) == 0);
   wire enPhi2 = (32'(cpudiv) == P_CPUDIV / 2);
   always_ff @(posedge clk)
-    if (!rst_n) cpudiv <= '0;
+    if (!crst_n) cpudiv <= '0;
     else cpudiv <= (32'(cpudiv) == P_CPUDIV - 1) ? '0 : cpudiv + 1'b1;
 
   // ------------------------------------------------------------------
@@ -143,7 +165,7 @@ module hyprduel_sys #(
 
   fx68k u_maincpu (
     .clk(clk), .HALTn(1'b1),
-    .extReset(!rst_n), .pwrUp(!rst_n),
+    .extReset(!crst_n), .pwrUp(!crst_n),
     .enPhi1(enPhi1), .enPhi2(enPhi2),
     .eRWn(m_rw), .ASn(m_asn), .LDSn(m_ldsn), .UDSn(m_udsn),
     .E(), .VMAn(),
@@ -168,7 +190,7 @@ module hyprduel_sys #(
 
   fx68k u_subcpu (
     .clk(clk), .HALTn(1'b1),
-    .extReset(!rst_n || sub_rst), .pwrUp(!rst_n),
+    .extReset(!crst_n || sub_rst), .pwrUp(!crst_n),
     .enPhi1(enPhi1), .enPhi2(enPhi2),
     .eRWn(s_rw), .ASn(s_asn), .LDSn(s_ldsn), .UDSn(s_udsn),
     .E(), .VMAn(),
@@ -194,9 +216,9 @@ module hyprduel_sys #(
 
   i4220_vdp #(.GFX_AW(GFX_AW), .P_PIXDIV(P_PIXDIV),
               .P_BIT5_CYCLES(2500 * P_PIXDIV * 20 / 3),
-              .P_IRQ_LINE_MASK(8'h03)) u_vdp (
+              .P_IRQ_LINE_MASK(8'h03), .FREE_TIMING(FREE_TIMING)) u_vdp (
     // 2500 us at the sys clock implied by P_PIXDIV vs the 6.667 MHz pixel
-    .clk(clk), .rst_n(rst_n),
+    .clk(clk), .rst_n(crst_n), .i_tim_rst(tim_rst), .o_tim_evt(tim_evt),
     // IRQ line mask: hyprduel 0x02, magerror 0x01 (straight from the
     // game_me_r flop and its inverse)
     .i_irq_line_mask({6'd0, ~me, me}),
@@ -256,7 +278,7 @@ module hyprduel_sys #(
   wire ym_cen    = (32'(ymdiv) == 0);
   wire ym_cen_p1 = ym_cen && ym_phase;
   always_ff @(posedge clk)
-    if (!rst_n) begin
+    if (!crst_n) begin
       ymdiv <= '0;
       ym_phase <= 1'b0;
     end else begin
@@ -278,7 +300,7 @@ module hyprduel_sys #(
   logic       hd_ym_wa0;
   logic [7:0] hd_ym_wd;
   always_ff @(posedge clk)
-    if (!rst_n) hd_ym_wpend <= 1'b0;
+    if (!crst_n) hd_ym_wpend <= 1'b0;
     else if (!hd_ym_cs_n && !s_rw) begin
       hd_ym_wpend <= 1'b1;
       hd_ym_wa0   <= s_a[1];
@@ -286,7 +308,7 @@ module hyprduel_sys #(
     end else if (ym_cen_p1) hd_ym_wpend <= 1'b0;
 
   jt51 u_ym (
-    .rst(!rst_n), .clk(clk), .cen(ym_cen), .cen_p1(ym_cen_p1),
+    .rst(!crst_n), .clk(clk), .cen(ym_cen), .cen_p1(ym_cen_p1),
     .cs_n(!(hd_ym_wpend && ym_cen_p1)), .wr_n(1'b0), .a0(hd_ym_wa0), .din(hd_ym_wd),
     .dout(jt51_dout),
     .ct1(), .ct2(), .irq_n(jt51_irq_n),
@@ -297,7 +319,7 @@ module hyprduel_sys #(
   logic        opll_cen;
   logic [26:0] opll_acc;
   always_ff @(posedge clk)
-    if (!rst_n) begin opll_acc <= '0; opll_cen <= 1'b0; end
+    if (!crst_n) begin opll_acc <= '0; opll_cen <= 1'b0; end
     else begin
       if (opll_acc + 27'd3579545 >= 27'd80000000) begin
         opll_acc <= opll_acc + 27'd3579545 - 27'd80000000;
@@ -323,7 +345,7 @@ module hyprduel_sys #(
     .i_XIN_EMUCLK         (clk),
     .o_XOUT               (),
     .i_phiM_PCEN_n        (~opll_cen),
-    .i_IC_n               (rst_n),
+    .i_IC_n               (crst_n),
     .i_ALTPATCH_EN        (1'b0),
     .i_CS_n               (!me_ym_cs),
     .i_WR_n               (!me_ym_cs),
@@ -359,7 +381,7 @@ module hyprduel_sys #(
   logic [$clog2(P_OKIDIV)-1:0] okidiv;
   wire oki_cen = (32'(okidiv) == 0);
   always_ff @(posedge clk)
-    if (!rst_n) okidiv <= '0;
+    if (!crst_n) okidiv <= '0;
     else okidiv <= (32'(okidiv) == P_OKIDIV - 1) ? '0 : okidiv + 1'b1;
 
   logic        oki_wrn;
@@ -367,7 +389,7 @@ module hyprduel_sys #(
   logic signed [13:0] oki_snd;
 
   jt6295 #(.INTERPOL(0)) u_oki (
-    .rst(!rst_n), .clk(clk), .cen(oki_cen), .ss(1'b1),
+    .rst(!crst_n), .clk(clk), .cen(oki_cen), .ss(1'b1),
     .wrn(oki_wrn), .din(oki_din), .dout(oki_dout),
     .rom_addr(o_oki_addr), .rom_data(i_oki_data), .rom_ok(i_oki_ok),
     .sound(oki_snd), .sample()
@@ -431,7 +453,7 @@ module hyprduel_sys #(
   // DEBUG: capture first 4 mrom reads (reset vector) and CPU address range
   logic [2:0] mrom_cap_cnt;
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       mrom_cap_cnt <= 3'd0;
       dbg_mrom_word0 <= '0;
       dbg_mrom_word1 <= '0;
@@ -465,7 +487,7 @@ module hyprduel_sys #(
   wire s_iack = s_fc2 && s_fc1 && s_fc0 && !s_asn;
 
   always_ff @(posedge clk) begin
-    if (!rst_n) vbl_pend <= 1'b0;
+    if (!crst_n) vbl_pend <= 1'b0;
     else begin
       if (vbl_pulse) vbl_pend <= 1'b1;
       if (m_iack && m_a[3:1] == 3'd2) vbl_pend <= 1'b0;   // HOLD_LINE ack
@@ -478,7 +500,7 @@ module hyprduel_sys #(
   localparam int TIMER_DIV = 80_000_000 / 968;
   logic [$clog2(TIMER_DIV)-1:0] tcnt;
   always_ff @(posedge clk)
-    if (!rst_n || sub_rst || !me) begin
+    if (!crst_n || sub_rst || !me) begin
       tcnt <= '0; me_timer_irq <= 1'b0;
     end else begin
       if (32'(tcnt) == TIMER_DIV - 1) begin
@@ -525,7 +547,7 @@ module hyprduel_sys #(
   wire [15:0] m_wmask = {{8{~m_udsn}}, {8{~m_ldsn}}};
 
   always_ff @(posedge clk)
-    if (!rst_n) begin
+    if (!crst_n) begin
       vdp_cs      <= 1'b0;
       vdp_addr    <= '0;
       vdp_rnw_r   <= 1'b1;
@@ -545,7 +567,7 @@ module hyprduel_sys #(
   logic        m_wr_done;
 
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       mbst <= MB_IDLE;
       m_wr_done <= 1'b0;
       o_mrom_rd <= 1'b0;
@@ -689,7 +711,7 @@ module hyprduel_sys #(
 
   integer sr3c_i;
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       for (sr3c_i = 0; sr3c_i < 1024; sr3c_i = sr3c_i + 1)
         sr3c_tag[sr3c_i] <= '0;
     end else begin
@@ -707,7 +729,7 @@ module hyprduel_sys #(
   end
 
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       sbst <= SB_IDLE;
       sr3_s_req <= 1'b0;
     end else begin
@@ -790,7 +812,7 @@ module hyprduel_sys #(
     wire ymw_commit = me && (sbst == SB_IDLE) && s_strobe && s_sel_ym &&
                       !s_rw && !s_iack && (ymw_busy == 11'd0);
     always_ff @(posedge clk)
-      if (!rst_n) begin
+      if (!crst_n) begin
         ymw_busy <= 11'd0;
         ymw_cs   <= 6'd0;
         me_ym_a0 <= 1'b0;
@@ -915,7 +937,7 @@ module hyprduel_sys #(
   logic sr3_req_r;
   logic sr3_last_s;                // 1 = sub was last served; toggles per grant
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       sr3_grant_s <= 1'b0; sr3_infly <= 1'b0; sr3_req_r <= 1'b0;
       sr3_last_s <= 1'b0;
     end else if (sr3_infly) begin
@@ -951,7 +973,7 @@ module hyprduel_sys #(
   // bring-up probes: sub-side sr3 grants, handshake word snoop, YM iacks
   logic s_iack_d1;
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       dbg_sack_cnt <= '0; dbg_hshk <= 16'hDEAD; dbg_iack1 <= '0; s_iack_d1 <= 1'b0;
     end else begin
       if (sr3_s_ack) dbg_sack_cnt <= dbg_sack_cnt + 16'd1;
@@ -966,7 +988,7 @@ module hyprduel_sys #(
 
   // copy-phase probes: GFX-window (0x460000+) reads and main sr3 reads
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (!crst_n) begin
       dbg_wadr <= '0; dbg_wcnt <= '0; dbg_srrc <= '0;
       dbg_wda[0] <= '0; dbg_wda[1] <= '0; dbg_wda[2] <= '0; dbg_wda[3] <= '0;
       dbg_b3e_w0 <= 16'hDEAD; dbg_b3e_w1 <= 16'hDEAD; dbg_bank <= '0;

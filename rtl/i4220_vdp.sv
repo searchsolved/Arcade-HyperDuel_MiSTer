@@ -27,10 +27,19 @@ module i4220_vdp #(
     // Which cause bits can drive the IRQ output line. Hyper Duel's board
     // only responds to hblank (bit 1) on IPL3; everything else is polled.
     // (MAME encodes the same fact by forcing the enable register OR 0xFD.)
-    parameter logic [7:0] P_IRQ_LINE_MASK = 8'hFF
+    parameter logic [7:0] P_IRQ_LINE_MASK = 8'hFF,
+    // 1 (MiSTer shell): the raster counters run from power-on and keep sync
+    // going while the core is held in reset (ROM download), with black RGB;
+    // i_tim_rst reloads their power-on state (line 0) once a frame and
+    // hyprduel_sys releases the core on the clock after that reload, so the
+    // game starts exactly as from a plain reset release.
+    // 0 (simulation default): counters reset with rst_n.
+    parameter bit FREE_TIMING = 1'b0
 ) (
     input  logic clk,
     input  logic rst_n,
+    input  logic i_tim_rst,      // FREE_TIMING: synchronous raster reload
+    output logic o_tim_evt,      // FREE_TIMING: the next pixel starts line 0
 
     // CPU slave bus (byte addr within the 512 KB region)
     input  logic        i_cs,
@@ -288,8 +297,9 @@ module i4220_vdp #(
   wire ce_pix = (pixdiv == 0);
   assign o_ce_pix = ce_pix;
 
+  wire tim_rst = FREE_TIMING ? i_tim_rst : !rst_n;
   always_ff @(posedge clk) begin
-    if (!rst_n) begin
+    if (tim_rst) begin
       pixdiv <= '0;
       hcnt <= '0;
       vcnt <= '0;
@@ -314,6 +324,8 @@ module i4220_vdp #(
   wire [8:0] vlast = i_compat60 ? 9'd261 : 9'd260;
   wire line_start   = ce_pix && (32'(hcnt) == H_TOTAL - 1);
   wire [8:0] next_v = (vcnt == vlast) ? 9'd0 : vcnt + 9'd1;
+  // FREE_TIMING: the pixel enable that ends the last line (line 0 follows)
+  assign o_tim_evt = ce_pix && (32'(hcnt) == H_TOTAL - 1) && (vcnt == vlast);
 
   // v12 display line: scan-out runs behind the game timeline
   // (invisible). Measured on silicon (ladder probe, 2026-07-18): the
@@ -1214,9 +1226,10 @@ module i4220_vdp #(
       vb1 <= vb0;
       so_pal <= pal_scanout_q;
       // stage 2: RGB out, aligned with de1 -> o_de
-      o_r <= so_pal[10:6];
-      o_g <= so_pal[15:11];
-      o_b <= so_pal[5:1];
+      // black while the core is held in reset (FREE_TIMING keeps sync running)
+      o_r <= (rst_n || !FREE_TIMING) ? so_pal[10:6]  : 5'd0;
+      o_g <= (rst_n || !FREE_TIMING) ? so_pal[15:11] : 5'd0;
+      o_b <= (rst_n || !FREE_TIMING) ? so_pal[5:1]   : 5'd0;
       o_de <= de1;
       o_hblank <= hb1;
       o_vblank <= vb1;

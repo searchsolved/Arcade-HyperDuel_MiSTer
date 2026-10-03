@@ -249,10 +249,14 @@ assign BUTTONS = 0;
   wire  [4:0] r5, g5, b5;
   wire signed [15:0] audio;
 
-  hyprduel_sys #(.GFX_AW(22), .P_PIXDIV(12)) core (
+  // FREE_TIMING: sync keeps running (black picture) while the ROMs download
+  // instead of stopping, so the scaler never loses the signal (seen as a
+  // green "no input" screen on other cores); the core starts on the raster's
+  // power-on phase, as from a plain reset release.
+  hyprduel_sys #(.GFX_AW(22), .P_PIXDIV(12), .FREE_TIMING(1'b1)) core (
     .i_game_me(game_me),
     .i_compat60(status[7]),
-    .clk(clk_sys), .rst_n(~reset),
+    .clk(clk_sys), .rst_n(~reset), .i_pwr_rst_n(pll_locked), .o_run(),
     .o_hs(hs), .o_vs(vs), .o_de(de), .o_ce_pix(ce_pix),
     .o_hblank(hbl), .o_vblank(vbl),
     .o_r(r5), .o_g(g5), .o_b(b5),
