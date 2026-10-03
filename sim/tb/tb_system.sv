@@ -440,6 +440,19 @@ module tb_system;
   logic [7:0] cur_reg;
   bit         r14_vals[256];       // distinct values ever written to reg 0x14
   int         iack1_edges, iack2_edges, irq_falls, st_reads;
+  int          ym51_fh;
+  initial begin
+    string yp;
+    ym51_fh = 0;
+    if ($value$plusargs("YM51LOG=%s", yp)) ym51_fh = $fopen(yp, "w");
+  end
+  int          okilog_fh;
+  logic [7:0]  oki_pend;
+  initial begin
+    string op;
+    okilog_fh = 0; oki_pend = 8'h00;
+    if ($value$plusargs("OKILOG=%s", op)) okilog_fh = $fopen(op, "w");
+  end
   logic [23:0] okiw_log [40];
   int          oki_mism, oki_lat, oki_maxlat;
   logic        oki_ok_d;
@@ -526,6 +539,25 @@ module tb_system;
       if (dut.ym_dout[0]) st_flagA <= st_flagA + 1;
       if (dut.ym_dout[1]) st_flagB <= st_flagB + 1;
       if (dut.ym_dout[7]) st_busy  <= st_busy  + 1;
+    end
+    // +YM51LOG=<path>: every Hyper Duel YM2151 write (CPU commit) and the
+    // status byte of every status read (sim/mame/tap_ym51.lua writes the
+    // same format; docs/ACCURACY.md 3.7)
+    if (ym51_fh != 0 && !dut.me && !dut.hd_ym_cs_n) begin
+      if (!dut.s_rw) $fwrite(ym51_fh, "W,%0d,%0d,%02x\n", frames_seen, dut.s_a[1], dut.s_dout[7:0]);
+      else           $fwrite(ym51_fh, "R,%0d,%02x\n", frames_seen, dut.jt51_dout);
+    end
+    // +OKILOG=<path>: every OKI command byte and, for each phrase start,
+    // the voices that were busy at that instant (sim/mame/tap_oki.lua
+    // writes the same format from MAME; docs/ACCURACY.md 3.7)
+    if (okilog_fh != 0 && !dut.oki_wrn) begin
+      $fwrite(okilog_fh, "W,%0d,%02x\n", frames_seen, dut.oki_din);
+      if (oki_pend[7]) begin
+        $fwrite(okilog_fh, "S,%0d,%02x,%x,%x\n", frames_seen, oki_pend[6:0],
+                dut.oki_din[7:4], dut.oki_dout[3:0]);
+        oki_pend <= 8'h00;
+      end else if (dut.oki_din[7])
+        oki_pend <= dut.oki_din;
     end
     // OKI diagnostics: command writes, status reads, output activity
     if (!dut.oki_wrn) begin
@@ -1038,6 +1070,10 @@ module tb_system;
     for (int i = 0; i < okir_n; i++)
       $display("  OKIR f=%0d val=%02x", okir_log[i][23:8], okir_log[i][7:0]);
     if (fh_audio != 0) $fclose(fh_audio);
+    if (okilog_fh != 0) $fclose(okilog_fh);
+    if (ym51_fh != 0) $fclose(ym51_fh);
+    if (fh_ym != 0) $fclose(fh_ym);
+    if (fh_oki != 0) $fclose(fh_oki);
     $finish;
   end
 

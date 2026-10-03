@@ -264,9 +264,30 @@ module hyprduel_sys #(
       if (ym_cen) ym_phase <= ~ym_phase;
     end
 
+  // A CPU write reaches jt51 on the next cen_p1 clock (docs/ACCURACY.md
+  // 3.7). jt51 takes register writes on any clock but sets its busy flag
+  // only for a write that coincides with cen_p1 (jt51_mmr: busy updates
+  // under cen); the one-clock commit strobe at 80 MHz hit cen_p1 about
+  // once in 40 writes, so the chip's busy flag almost never rose after a
+  // data write. Holding the write until cen_p1 moves the register update
+  // by at most one P1 period (0.5 us). The sound program never writes the
+  // YM2151 twice within 0.5 us (MAME: 6.6 us minimum), so one pending
+  // write is enough. Reads need no hold: jt51's status output does not
+  // depend on cs_n.
+  logic       hd_ym_wpend;
+  logic       hd_ym_wa0;
+  logic [7:0] hd_ym_wd;
+  always_ff @(posedge clk)
+    if (!rst_n) hd_ym_wpend <= 1'b0;
+    else if (!hd_ym_cs_n && !s_rw) begin
+      hd_ym_wpend <= 1'b1;
+      hd_ym_wa0   <= s_a[1];
+      hd_ym_wd    <= s_dout[7:0];
+    end else if (ym_cen_p1) hd_ym_wpend <= 1'b0;
+
   jt51 u_ym (
     .rst(!rst_n), .clk(clk), .cen(ym_cen), .cen_p1(ym_cen_p1),
-    .cs_n(hd_ym_cs_n), .wr_n(s_rw), .a0(s_a[1]), .din(s_dout[7:0]),
+    .cs_n(!(hd_ym_wpend && ym_cen_p1)), .wr_n(1'b0), .a0(hd_ym_wa0), .din(hd_ym_wd),
     .dout(jt51_dout),
     .ct1(), .ct2(), .irq_n(jt51_irq_n),
     .sample(), .left(), .right(), .xleft(ym_xl), .xright(ym_xr)

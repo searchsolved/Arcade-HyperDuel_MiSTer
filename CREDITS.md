@@ -24,10 +24,17 @@ LICENSE). Local modifications to vendored cores are documented in
 | jt51 (Yamaha YM2151) | Jose Tejada (@topapate / jotego) | GPL-3.0-or-later | https://github.com/jotego/jt51 |
 | jt6295 (OKI MSM6295) | Jose Tejada (@topapate / jotego) | GPL-3.0-or-later | https://github.com/jotego/jt6295 |
 
-The jt51 and jt6295 cores are used unmodified except for the build
-accommodations listed in `rtl/vendor/PATCHES.md` (a padded lookup table
-for Quartus 17 RAM inference and Verilator lint pragmas). fx68k carries
-a packed-struct portability patch for Verilator, also documented there.
+The jt51 core is used unmodified except for the build accommodations
+listed in `rtl/vendor/PATCHES.md` (Verilator lint pragmas); the core's
+bus glue holds each YM2151 write until jt51's cen_p1 so its busy flag
+works. jt6295 has the same build accommodation (a lookup table kept in
+logic for Quartus 17 RAM inference) and three behavioural patches to
+`jt6295_serial.v`, matching MAME's M6295 model: a phrase ends after the
+second nibble of its stop byte, a start command to a channel that is
+still playing is ignored, and the busy flags follow the committed
+channel state (`rtl/vendor/PATCHES.md`, `docs/ACCURACY.md` 3.7). fx68k
+carries a packed-struct portability patch for Verilator, also
+documented there.
 
 If you enjoy this core, consider supporting Jose Tejada's FPGA work:
 https://www.patreon.com/jotego

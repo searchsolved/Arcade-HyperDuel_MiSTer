@@ -330,6 +330,72 @@ an OSD "Video Timing" option for a 60 Hz compat mode (some displays
 dislike 60.24); the raster freshness work in 3.3 was subsequently
 redone against the 261-line frame as required.
 
+### 3.7 Resolved (2026-10-03): three jt6295 fixes and the YM2151 write strobe
+
+Ported from the 1945k III and Tecmo 16 cores, where each was found by a
+sample-level comparison with MAME (rtl/vendor/PATCHES.md has the code
+and the evidence for each).
+
+**What changed.**
+
+1. jt6295 phrase end: a phrase now ends after the second nibble of its
+   stop byte, 2 x (stop - start + 1) samples as in MAME's okim6295.
+   Upstream jt6295 ended one sample early.
+2. jt6295 start on a busy channel: ignored, as MAME (okim6295.cpp
+   L281-284) and jt6295's own README describe. Upstream restarted the
+   phrase.
+3. jt6295 busy flags follow the channel state committed at cen4, so a
+   pending stop is not reported idle before it takes effect (and cannot
+   be cancelled by the next start's first byte).
+4. YM2151: a CPU write is held until jt51's next cen_p1 instead of a
+   one-clock strobe. jt51 sets its busy flag only for a write on cen_p1,
+   so with the strobe the flag almost never rose after a data write.
+   The register update moves by at most 0.5 us.
+
+**What it does to these games.** Measured with MAME 0.288 taps
+(`sim/mame/tap_oki.lua`, `sim/mame/tap_ym51.lua`, inputs replayed into
+MAME with `sim/mame/inputs_replay.lua`) and the full system
+(`sim/tb/tb_system.sv` `+OKILOG`, `+YM51LOG`):
+
+- Neither game ever reads the M6295 status (MAME: 0 reads in 5,400
+  frames of Hyper Duel attract, 5,400 of scripted Hyper Duel gameplay
+  (`sim/inputs/inputs_okiplay.txt`) and 5,400 of Magical Error attract;
+  the core: 0 reads). The OKI cannot change program flow; fixes 1 to 3
+  only change sound.
+- No phrase start ever finds its voice busy (MAME: 0 of 497, 561 and 74
+  starts; the sound programs stop a voice before restarting it). Fix 2
+  therefore changes nothing here.
+- Replaying MAME's command streams through jt6295 alone at MAME's OKI
+  clock (`sim/okireplay/`): fix 1 adds the last sample of each phrase
+  (0.0077%, 0.0036% and 0.90% of output samples differ; level change
+  under 0.001 dB in all three); in Magical Error two phrases also start
+  one sample slot later, which accounts for most of its 0.90%. Fix 3 on
+  top changes no output sample in any of the three streams.
+- YM2151: the game's status reads never see busy, before or after fix
+  4 (MAME: 0 of 153,019 reads in 1,700 frames of gameplay; the core:
+  0 before and after). A/B over 1,700 frames of the full system
+  (scripted gameplay, `+INPUTS=sim/inputs/inputs_okiplay.txt`), the
+  released RTL against this change: all 122,948 YM2151 writes, all
+  156,776 status values read and all 198 M6295 command bytes are
+  identical, in order. Program flow is unchanged.
+- The scripted gameplay runs cannot be compared with MAME frame for
+  frame: the core and MAME reach the title at different frames (MAME's
+  boot-time CPU suspension hacks, docs/audio_bug_ym_irq_storm.md), so
+  the same input frames land in different game states.
+- Against MAME: Magical Error's OKI command stream equals MAME's in
+  value with a constant 4-frame offset; one pair of sound requests in
+  the same frame (frame 925, MAME 921) is issued in the opposite order,
+  as before this change (the CPU never reads the OKI, and the YM2151
+  hold is gated off for Magical Error, so the program flow there is the
+  pre-change flow).
+
+**Believed accurate.** Fixes 1 to 3 match MAME's M6295 model, the jt6295
+README and, for 1945k III, Solite Spirits and Ganbare Ginkun, MAME's
+output sample for sample. The M6295 datasheet was not consulted (open:
+research item in the 1945k III core). Fix 4 makes jt51 behave as the
+chip's datasheet describes (busy after a data write); it is not
+observable in this game.
+
 ## 4. What we do NOT claim
 
 - Not "cycle-accurate": that term is unfalsifiable without silicon

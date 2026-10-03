@@ -48,3 +48,48 @@ IKAOPLL (cycle-accurate, die-shot based YM2413) by Sehyeon Kim
 jtopl's jt2413 for the die-derived cycle accuracy; licence sits fine
 beside the GPL cores (BSD-2 is GPL-compatible). Verilator 5.050 lint:
 0 errors, 16 benign width warnings, no UNOPTFLAT/BLKANDNBLK/LATCH.
+
+## jt6295_serial.v: phrase end, start on a busy channel, busy timing (2026-10-03)
+Three behavioural patches, ported from the 1945k III core (patches 1
+and 2, its `rtl/vendor/jt6295/PROVENANCE.md`) and the Tecmo 16 core
+(patch 3, its `rtl/vendor/SOUND_PROVENANCE.md`), applied identically
+here. Verification for this core
+is in `docs/ACCURACY.md` 3.7.
+
+1. Phrase end, stop byte inclusive. Original
+   `assign over = rom_addr >= stop_out;` ends a voice when its byte
+   address reaches the stop address, after only the first nibble of the
+   stop byte: 2 * (stop - start) + 1 samples. The MSM6295 phrase table
+   gives the last byte of the phrase as the stop address, and MAME's
+   okim6295 plays 2 * (stop - start + 1) samples. Patched to
+   `assign over = cnt >= {stop_out, 1'b1};`. Measured in the 1945k III
+   core: the busy bit now lasts the nominal length (it ended 137 enables,
+   about one sample, early before the patch).
+2. Start command to a channel that is still playing is ignored. The
+   original reloads the channel (start, stop, attenuation) whenever its
+   start request comes round, busy or not, restarting the phrase.
+   Patched: `start_ok = up_start & ~busy_out` replaces `up_start` in the
+   reload terms; the request is still acknowledged so jt6295_ctrl clears
+   it, and a stop on the same cycle still wins. Evidence: MAME 0.288
+   okim6295.cpp L281-284 (the start is not performed), jt6295's own
+   README lines 31-33 ("ignore commands to the same channel as long as
+   the playback has not ended"; the code did not do this, and upstream
+   jotego/jt6295 master has the same code), and games that re-send a
+   start every frame (Solite Spirits, 1945k III) which only sound as in
+   MAME with the start ignored. The MSM6295 datasheet was not checked;
+   the real chip's behaviour stays a research item.
+3. Busy flags committed at cen4. Upstream updates the per-channel
+   `busy` flags on every clock of the channel's slot, so a pending stop
+   reads as idle for up to one slot before it is committed; a start
+   command's first byte clears the pending stop in jt6295_ctrl, so a
+   start written in that window cancels the stop (the old phrase plays
+   on, the new start is ignored as busy). Patched: the `case( ch )`
+   update of `busy` runs only on `cen4`, with the channel state in the
+   CSR shift register. Found in Ganbare Ginkun, whose fade-outs (stop,
+   poll until idle, restart at the next attenuation) were lost; there
+   the patch brings the M6295 level to MAME's within 0.03 dB.
+
+Related change outside the vendor tree (`rtl/hyprduel_sys.sv`, also
+2026-10-03): a CPU write to the YM2151 is held until jt51's next cen_p1
+instead of a one-clock strobe, because jt51 sets its busy flag only for
+a write that lands on cen_p1. jt51 itself is unmodified.
