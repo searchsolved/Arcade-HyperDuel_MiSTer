@@ -330,6 +330,31 @@ module hyprduel_sys #(
       end
     end
 
+  // Reset-time enable for IKAOPLL. It samples IC_n only on its phiM enable
+  // (IKAOPLL_timinggen), and opll_cen is held at 0 while crst_n is low, so
+  // the chip never saw the reset: from power-on it put out a 0.18 s decaying
+  // offset before the game's first write (MAME silent), and after an OSD
+  // reset it kept its old state. This enable runs only in reset, one pulse
+  // every 8 clocks for 4,608 pulses (64 YM2413 cycles of 72 phiM); opll_cen
+  // still restarts from 0 at the release (docs/ACCURACY.md 3.10).
+  logic [2:0]  opll_rst_div;
+  logic [12:0] opll_rst_cnt;
+  logic        opll_rst_cen;
+  always_ff @(posedge clk) begin
+    opll_rst_cen <= 1'b0;
+    if (crst_n) begin
+      opll_rst_div <= '0;
+      opll_rst_cnt <= '0;
+    end else if (opll_rst_cnt != 13'd4608) begin
+      opll_rst_div <= opll_rst_div + 3'd1;
+      if (opll_rst_div == 3'd0) begin
+        opll_rst_cen <= 1'b1;
+        opll_rst_cnt <= opll_rst_cnt + 13'd1;
+      end
+    end
+  end
+  wire opll_pcen = crst_n ? opll_cen : opll_rst_cen;
+
   wire signed [15:0] opll_acc_out;
   /* verilator lint_off UNUSEDSIGNAL */
   wire               opll_acc_strb;       // sample strobe (TB +OPLLDUMP)
@@ -344,7 +369,7 @@ module hyprduel_sys #(
   ) u_opll (
     .i_XIN_EMUCLK         (clk),
     .o_XOUT               (),
-    .i_phiM_PCEN_n        (~opll_cen),
+    .i_phiM_PCEN_n        (~opll_pcen),
     .i_IC_n               (crst_n),
     .i_ALTPATCH_EN        (1'b0),
     .i_CS_n               (!me_ym_cs),

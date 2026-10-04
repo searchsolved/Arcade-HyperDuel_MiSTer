@@ -454,6 +454,41 @@ checks identical. Release build Arcade-Hyprduel_20261004.rbf, md5
 HDMI setup +0.441 / hold +0.200 ns, all clocks non-negative; 73% ALMs,
 550 of 553 RAM blocks.
 
+### 3.10 YM2413 reset (2026-10-04)
+
+Cause: IKAOPLL samples IC_n only on its phiM enable (IKAOPLL_timinggen
+detects the IC falling edge there and resets its phi1 and master-cycle
+counters from it), and opll_cen was held at 0 while the core was in reset.
+So the YM2413 never reset: from power-on it put out a decaying offset for
+the first 0.18 s (ACC peak 342, about 1,700 at the core output, -26 dBFS),
+where MAME 0.288 is silent (its first non-zero sample is at 7.97 s, when
+the music starts; the game's first YM write is at frame 486), and after
+an OSD reset it kept its old state. The same bug was found in Side Arms
+and DEC8 (jt51 and jt03). Hyper Duel's jt51 is not affected: its enable
+divider is held at 0 in reset, which keeps cen high throughout.
+
+Fix (rtl/hyprduel_sys.sv): a second enable runs only while the core is in
+reset, one pulse every 8 clocks for 4,608 pulses (64 YM2413 sample cycles
+of 72 phiM), then stops. opll_cen still restarts from 0 at the release.
+
+Evidence, Magical Error, 900 frames, SDRAM path, reset held 40,000 clocks
+(new tb plusarg +RSTCLKS; the MiSTer holds reset for the whole ROM
+download), previous RTL against the fix:
+
+| Check | Previous | Fix |
+|---|---|---|
+| Core YM output before the first write (0 to 6.40 s) | 6,892 non-zero samples, peak 342, last at 0.177 s | 0 |
+| CPU write stream (2,900 writes, sub CPU side) | | identical in order, data and time |
+| Bytes latched by the chip | | identical in order and data; latch times move by -680 to +230 ns (the chip's internal cycle counter now starts from its IC edge) |
+| Music level, 2 s windows from 8 s to 14.9 s | | within 0.007 dB |
+| OKI | | identical |
+
+The core output after the first write is not sample-identical (46 to 65%
+of samples equal) because of the moved internal cycle phase; the level
+and the write stream are unchanged. The accurate side is the fix: the
+chip now starts from its own reset state as on a real IC pulse, and the
+output before the first write matches MAME's silence.
+
 ## 4. What we do NOT claim
 
 - Not "cycle-accurate": that term is unfalsifiable without silicon

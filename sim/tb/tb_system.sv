@@ -23,6 +23,7 @@ module tb_system #(
 
   logic clk;
   logic rst_n;
+  int   rst_clks;
   initial clk = 0;
   always #5 clk = ~clk;
 
@@ -999,8 +1000,13 @@ module tb_system #(
       $display("tb_system: SDRAM path enabled (controller + model)");
     end
 
+    // +RSTCLKS=n: hold reset for n clocks (default 32). The MiSTer holds
+    // the core in reset for the whole ROM download; 40000 covers the
+    // 36,864-clock IKAOPLL reset-enable burst (docs/ACCURACY.md 3.10).
+    rst_clks = 32;
+    void'($value$plusargs("RSTCLKS=%d", rst_clks));
     rst_n = 0;
-    repeat (32) @(posedge clk);
+    repeat (rst_clks) @(posedge clk);
     rst_n = 1;
 
     last_dumped = 0;
