@@ -11,7 +11,7 @@ to `/media/fat/_Arcade/_alternatives/_Hyper Duel/`.
 
 | File | md5 | Notes |
 |------|-----|-------|
-| `Arcade-Hyprduel_20261003.rbf` | `f31a109b1ef43f24feb3e13364acbe8e` | M6295 (jt6295) phrase end, start-on-busy and busy-flag fixes; YM2151 write held to jt51 cen_p1 (docs/ACCURACY.md 3.7). 2,200-frame SDRAM soak (all gate counters 0), 1,700-frame A/B against the previous RTL and timing (all clocks non-negative) passed; on-hardware verification pending. |
+| `Arcade-Hyprduel_20261004.rbf` | `1a43eebf55e0c6ca3e6b4a3f1137b5f0` | M6295 (jt6295) BUSY timed as the datasheet, phrase end and start handling as MAME; YM2151 write held to jt51 cen_p1 (docs/ACCURACY.md 3.7, 3.8). Video sync keeps running (black) during the ROM download instead of stopping. Board A/B against the previous RTL (601 frames, frame dumps and write logs identical) and timing (all clocks non-negative) passed; on-hardware verification pending. |
 | `Arcade-Hyprduel_20260927.rbf` | `61ffd24598df77d4a0ed8d1b3f068232` | Previous release. One RBF for Hyper Duel and Magical Error (MRA mod byte). Magical Error YM2413 music fixed. HDMI video options (aspect, scale, 216p crop). |
 
 Every released RBF passed, in order: the full Verilator parity suite,

@@ -437,6 +437,23 @@ other cores:
 
 Not built yet: a video change is being added first, then one build.
 
+### 3.9 Video sync during the ROM download (2026-10-04)
+
+The shell held the core in reset through the ROM download, and that reset
+also stopped the I4220's raster counters, so there was no sync for the
+length of the download (on other cores of ours this showed as a green
+"no input" screen). With FREE_TIMING (hyprduel_sys / i4220_vdp parameter,
+set by the shell only) the raster runs from the PLL lock and keeps sync
+going with black RGB; once a frame the pixel enable that would start line
+0 reloads the counters instead, and the core leaves reset on the clock
+after that reload, so the game starts exactly as from a plain reset
+release. A/B against 101a9e7 (tb_system, SDRAM path, 601 frames): all 25
+frame dumps, the write and IACK logs and the scroll/ladder/in-flight
+checks identical. Release build Arcade-Hyprduel_20261004.rbf, md5
+1a43eebf55e0c6ca3e6b4a3f1137b5f0: core setup +0.523 / hold +0.249 ns,
+HDMI setup +0.441 / hold +0.200 ns, all clocks non-negative; 73% ALMs,
+550 of 553 RAM blocks.
+
 ## 4. What we do NOT claim
 
 - Not "cycle-accurate": that term is unfalsifiable without silicon
